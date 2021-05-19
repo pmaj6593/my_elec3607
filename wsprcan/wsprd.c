@@ -35,16 +35,20 @@
 #include <stdint.h>
 #include <time.h>
 #include <fftw3.h>
-
 #include "fano.h"
 #include "jelinek.h"
 #include "nhash.h"
 #include "wsprd_utils.h"
 #include "wsprsim_utils.h"
 
+//Pulse
 #include <pulse/simple.h>
 #include <pulse/error.h>
 #include <pulse/gccmacro.h>
+
+#include "gpiod.h"
+#define GPIOCHIP        0
+#define GPIOLINE        27
 
 #define max(x,y) ((x) > (y) ? (x) : (y))
 // Possible PATIENCE options: FFTW_ESTIMATE, FFTW_ESTIMATE_PATIENT,
@@ -70,6 +74,25 @@ int printdata=0;
 pa_simple *s;
 pa_sample_spec xss;
 
+void led(void) {
+        struct gpiod_chip *output_chip;
+        struct gpiod_line *output_line;
+
+
+        /* open chip and get line */
+        output_chip = gpiod_chip_open_by_number(GPIOCHIP);
+        output_line = gpiod_chip_get_line(output_chip, GPIOLINE);
+
+        /* config as output and set a description */
+        gpiod_line_request_output(output_line, "blink",GPIOD_LINE_ACTIVE_STATE_HIGH);
+
+        printf("flash led\n");
+        gpiod_line_set_value(output_line, 1);
+        sleep(1);
+        gpiod_line_set_value(output_line, 0);
+        //return;
+      }
+
 //***************************************************************************
 unsigned long readc2file(char *ptr_to_infile, double *idat, double *qdat,
                          double *freq, int *wspr_type)
@@ -81,7 +104,7 @@ unsigned long readc2file(char *ptr_to_infile, double *idat, double *qdat,
     FILE* fp;
 
     buffer=malloc(sizeof(float)*2*65536);
-	if(buffer==NULL){
+    if(buffer==NULL){
         return 1;
 }
     memset(buffer,0,sizeof(float)*2*65536);
@@ -119,8 +142,8 @@ unsigned long readwavfile(char *ptr_to_infile, int ntrmin, double *idat, double 
     int i0;
     double df;
 
-   	/*from parec*/
-   	static const pa_sample_spec xss = {
+    /*from parec*/
+    static const pa_sample_spec xss = {
         .format = PA_SAMPLE_S16LE,
         .rate = 12000,
         .channels = 1
@@ -161,7 +184,6 @@ unsigned long readwavfile(char *ptr_to_infile, int ntrmin, double *idat, double 
     if(buf2==NULL){
         return 1;
     }
-
     /*
     fp = fopen(ptr_to_infile,"rb");
     if (fp == NULL) {
@@ -174,10 +196,6 @@ unsigned long readwavfile(char *ptr_to_infile, int ntrmin, double *idat, double 
     fclose(fp);
     */
 
-   	/////////////////////////////////////
-   	/* from parec */
-
-    
     if (!(s = pa_simple_new(NULL, "wspr", PA_STREAM_RECORD, NULL, "record", &xss, NULL, NULL, &error))) {
         fprintf(stderr, __FILE__": pa_simple_new() failed: %s\n", pa_strerror(error));
     }
@@ -188,10 +206,16 @@ unsigned long readwavfile(char *ptr_to_infile, int ntrmin, double *idat, double 
     /////////////////////////////////////
     nr = npoints;
     if(nr!=npoints){
-		printf("Failed to read data file\n");
-		printf("requested: %lu got: %lu\n",npoints,nr);
-		return 1;
-	}
+        printf("Failed to read data file\n");
+        printf("requested: %lu got: %lu\n",npoints,nr);
+        return 1;
+    }
+
+    if(nr!=npoints){
+        printf("Failed to read data file\n");
+        printf("requested: %lu got: %lu\n",npoints,nr);
+        return 1;
+    }
 
     realin=(double*) fftw_malloc(sizeof(double)*nfft1);
     fftout=(fftw_complex*) fftw_malloc(sizeof(fftw_complex)*nfft1);
@@ -459,7 +483,7 @@ void subtract_signal2(double *id, double *qd, long np,
     cfi=malloc(sizeof(double)*nc2);
     cfq=malloc(sizeof(double)*nc2);
     if(refi==NULL || refq==NULL || ci==NULL || cq==NULL || cfi==NULL || cfq==NULL){
-	goto fail;
+    goto fail;
     }
     memset(refi,0,sizeof(double)*nc2);
     memset(refq,0,sizeof(double)*nc2);
@@ -571,9 +595,9 @@ unsigned long writec2file(char *c2filename, int trmin, double freq
     int i;
     double *buffer;
     buffer=malloc(sizeof(double)*2*45000);
-	if(buffer==NULL){
+    if(buffer==NULL){
         return 1;
-	}
+    }
     memset(buffer,0,sizeof(double)*2*45000);
 
     FILE *fp;
@@ -634,7 +658,12 @@ int main(int argc, char *argv[])
     unsigned char *symbols, *channel_symbols;
     signed char message[]={-9,13,-35,123,57,-39,64,0,0,0,0};
     char *callsign, *call_loc_pow;
-    char *ptr_to_infile,*ptr_to_infile_suffix;
+    char *ptr_to_infile_suffix;
+    //
+    char *ptr_to_infile = NULL;
+    bool success;
+    //
+
     char *data_dir=NULL;
     char wisdom_fname[200],all_fname[200],spots_fname[200];
     char timer_fname[200],hash_fname[200];
@@ -707,10 +736,10 @@ int main(int argc, char *argv[])
 
     idat=malloc(sizeof(double)*maxpts);
     qdat=malloc(sizeof(double)*maxpts);
-	if(qdat==NULL || idat==NULL){
-		free(idat);
-		free(qdat);
-		return 1;
+    if(qdat==NULL || idat==NULL){
+        free(idat);
+        free(qdat);
+        return 1;
     }
     memset(qdat,0,sizeof(double)*maxpts);
     memset(idat,0,sizeof(double)*maxpts);
@@ -773,11 +802,12 @@ int main(int argc, char *argv[])
     }
 
     if( optind+1 > argc) {
-        usage();
-        return 1;
+        ptr_to_infile = NULL;
+
     } else {
         ptr_to_infile=argv[optind];
     }
+
 
     // setup metric table
     for(i=0; i<256; i++) {
@@ -821,8 +851,8 @@ int main(int argc, char *argv[])
     }
     ftimer=fopen(timer_fname,"w");
 
-    if( strstr(ptr_to_infile,".wav") ) {
-        ptr_to_infile_suffix=strstr(ptr_to_infile,".wav");
+    if(ptr_to_infile == NULL || strstr(ptr_to_infile,".wav") ) {
+        //ptr_to_infile_suffix=strstr(ptr_to_infile,".wav");
 
         t0 = clock();
         npoints=readwavfile(ptr_to_infile, wspr_type, idat, qdat);
@@ -846,10 +876,10 @@ int main(int argc, char *argv[])
     }
 
     // Parse date and time from given filename
-    strncpy(date,ptr_to_infile_suffix-11,6);
-    strncpy(uttime,ptr_to_infile_suffix-4,4);
-    date[6]='\0';
-    uttime[4]='\0';
+    //strncpy(date,ptr_to_infile_suffix-11,6);
+    //strncpy(uttime,ptr_to_infile_suffix-4,4);
+    //date[6]='\0';
+    //uttime[4]='\0';
 
     // Do windowed ffts over 2 symbols, stepped by half symbols
     int nffts=4*floor(npoints/512)-1;
@@ -1284,6 +1314,8 @@ int main(int argc, char *argv[])
             }
         }
     }
+
+
     free(idat);
     free(qdat);
     free(callsign);
@@ -1303,8 +1335,10 @@ int main(int argc, char *argv[])
             }
         }
     }
+    success = false;
 
     for (i=0; i<uniques; i++) {
+        success = true;
         printf("%4s %3.0f %4.1f %10.6f %2d  %-s \n",
                decodes[i].time, decodes[i].snr,decodes[i].dt, decodes[i].freq,
                (int)decodes[i].dt, decodes[i].message);
@@ -1320,8 +1354,13 @@ int main(int argc, char *argv[])
                 decodes[i].snr, decodes[i].dt, decodes[i].freq,
                 decodes[i].message, (int)decodes[i].drift, decodes[i].cycles/81,
                 decodes[i].jitter);
+                }
 
+
+    if (success == true){
+      led();
     }
+    
     printf("<DecodeFinished>\n");
 
     fftw_free(fftin);
